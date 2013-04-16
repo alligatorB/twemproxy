@@ -254,19 +254,24 @@ server_failure(struct context *ctx, struct server *server)
     struct server_pool *pool = server->owner;
     int64_t now, next;
     rstatus_t status;
-    int do_update;
+    bool is_reconnect;
 
     if (!pool->auto_eject_hosts) {
         return;
     }
 
-    do_update = (server->fail == FAIL_STATUS_NORMAL) ? 1 : 0;
-    server->failure_count++;
-    add_failed_server(ctx, server);
 
     log_debug(LOG_VERB, "server '%.*s' failure count %"PRIu32" limit %"PRIu32,
               server->pname.len, server->pname.data, server->failure_count,
               pool->server_failure_limit);
+
+    server->failure_count++;
+    is_reconnect = (server->fail != FAIL_STATUS_NORMAL) ? true : false;
+
+    if (is_reconnect) {
+        add_failed_server(ctx, server);
+        return;
+    }
 
     if (server->failure_count < pool->server_failure_limit) {
         return;
@@ -276,25 +281,25 @@ server_failure(struct context *ctx, struct server *server)
     if (now < 0) {
         return;
     }
+
     next = now + pool->server_retry_timeout;
     server->next_retry = next;
 
-    if (do_update) {
-        log_debug(LOG_INFO, "update pool %"PRIu32" '%.*s' to delete server '%.*s' "
-                "for next %"PRIu32" secs", pool->idx, pool->name.len,
-                pool->name.data, server->pname.len, server->pname.data,
-                pool->server_retry_timeout / 1000 / 1000);
+    log_debug(LOG_INFO, "update pool %"PRIu32" '%.*s' to delete server '%.*s' "
+            "for next %"PRIu32" secs", pool->idx, pool->name.len,
+            pool->name.data, server->pname.len, server->pname.data,
+            pool->server_retry_timeout / 1000 / 1000);
 
-        stats_pool_incr(ctx, pool, server_ejects);
+    stats_pool_incr(ctx, pool, server_ejects);
 
-        server->failure_count = 0;
+    server->failure_count = 0;
 
-        status = server_pool_run(pool);
-        if (status != NC_OK) {
-            log_error("updating pool %"PRIu32" '%.*s' failed: %s", pool->idx,
-                    pool->name.len, pool->name.data, strerror(errno));
-        }
+    status = server_pool_run(pool);
+    if (status != NC_OK) {
+        log_error("updating pool %"PRIu32" '%.*s' failed: %s", pool->idx,
+                pool->name.len, pool->name.data, strerror(errno));
     }
+    add_failed_server(ctx, server);
 }
 
 static void
